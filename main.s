@@ -42,7 +42,10 @@ render_y: .res 1
 render_tile: .res 1
 
 direction: .res 1
-animState: .res 1
+animState: .res 1 ; 0 = Neutral, 1 = Move front, 2 = Move back,
+timer: .res 1 ; Timer to control sprite animation
+vblank_flag: .res 1 ; Flag to signal when vblank has started
+skip_animation_flag: .res 1 ; Flag to skip animation
 
 
 ; Main code segment for the program
@@ -136,78 +139,8 @@ sta current_oam_address
           sta render_x
           iny
           jsr render_tile_subroutine
-          cpy #(16*12)
+          cpy #(16*4)
           bne loop_load_sprites
-
-  load_name_table:
-        lda PPUSTATUS
-        lda #$22
-        sta PPUADDR
-        lda #$8c
-        sta PPUADDR
-
-        ldx #$00
-        @loop:
-            lda name_table, x
-            sta PPUDATA
-            inx
-            cpx #$8
-            bne @loop
-        
-        lda #$22
-        sta PPUADDR
-        lda #$ac
-        sta PPUADDR
-
-        @loop2:
-            lda name_table, x
-            sta PPUDATA
-            inx
-            cpx #16
-            bne @loop2
-        
-        lda #$22
-        sta PPUADDR
-        lda #$cc
-        sta PPUADDR
-
-        @loop3:
-            lda name_table, x
-            sta PPUDATA
-            inx
-            cpx #24
-            bne @loop3
-        
-        lda #$22
-        sta PPUADDR
-        lda #$ec
-        sta PPUADDR
-
-        @loop4:
-            lda name_table, x
-            sta PPUDATA
-            inx
-            cpx #32
-            bne @loop4     
-
-    load_attributes:
-        lda PPUSTATUS
-        lda #$23
-        sta PPUADDR
-        lda #$eb
-        sta PPUADDR
-
-        lda #%01010000
-        sta PPUDATA
-
-        lda #$23
-        sta PPUADDR
-        lda #$ec
-        sta PPUADDR
-
-        lda #%10010000
-        sta PPUDATA
-
 
 enable_rendering:
   lda #%10010000	; Enable NMI
@@ -216,18 +149,46 @@ enable_rendering:
   sta PPUMASK
 
 forever:
+  jsr Update_Sprite_logic
   jmp forever
 
 nmi:
+  pha
+  txa
+  pha
+  tya
+  pha
+
+
+  lda #1
+  sta vblank_flag
+
   lda #$02 ;load 0200 que es donde empieza el SPRITE_BUFFER
   sta OAMDMA ;store en OAMDATA
 
+  lda timer ; este temporizador nos dira cuando puedo cambiar de animacion
+  cmp #30 ; comparo timer con 30
+  bne skip_timer_reset; si no es 30 entonces no reseteo el timer
 
+  lda #$00
+  sta timer ; reseteo el timer
+
+skip_timer_reset:
+  inc timer
+
+  ;reset scroll position
   lda #$00
   sta PPUSCROLL
   lda #$00
   sta PPUSCROLL
 
+
+  pla 
+  tay
+  pla
+  tax
+  pla
+  
   rti
 
 render_tile_subroutine:
@@ -252,6 +213,105 @@ render_tile_subroutine:
     stx available_oam ; Update available_oam to the next available OAM buffer index`
 
     rts
+ ; update sprite debe entrar al oam data y cambiar los valores de los tiles para que cambie el tile dibujado cada cierto tiempo
+
+Update_Sprite_logic:
+  jsr check_update_condition ; jump to check_update_condition subroutine
+  lda skip_animation_flag
+  cmp #1 ; Check if skip_animation_flag is set
+  beq end_update_sprite_logic
+
+  lda animState ; Check if animState is 2
+  cmp #2
+  beq reset_animation_state_and_sprites ; If animState is not 2, reset animState and sprites
+
+
+  jsr update_sprites ; If animState is 2, update sprites
+  jmp end_update_sprite_logic
+
+  reset_animation_state_and_sprites:
+    ; Reset animState to 0
+    lda #$00
+    sta animState
+
+    ; Reset sprites to first frame (assuming the reset logic is corrected from subtraction to addition)
+    ldx #9 ; Start offset in sprite buffer
+    ldy #0
+    reset_sprites_loop:
+      lda SPRITE_BUFFER, x
+      clc
+      sbc #3 ; Adjust according to the desired frame change
+      sta SPRITE_BUFFER, x
+      inx
+      inx
+      inx
+      inx
+      iny
+      cpy #16
+      bne reset_sprites_loop
+  end_update_sprite_logic:
+    lda #$00
+    sta skip_animation_flag
+  rts
+
+  update_sprites:
+  pha
+  txa
+  pha
+  tya
+  pha
+
+    ; Update animation state
+    lda animState
+    clc
+    adc #1
+    sta animState
+
+    ldx #9 ; Start offset in sprite buffer
+    ldy #0
+    update_sprites_loop:
+      lda SPRITE_BUFFER, x
+      clc
+      adc #2 ; Adjust to change the sprite to the next frame
+      sta SPRITE_BUFFER, x
+      inx
+      inx
+      inx
+      inx
+      iny
+      cpy #16
+      bne update_sprites_loop
+    lda #$00 ; Reset vblank_flag
+    sta vblank_flag
+
+  pla
+  tay
+  pla
+  tax
+  pla
+    rts
+
+
+check_update_condition:
+    lda timer
+    cmp #29
+    bne set_skip_flag  ; Si frameCounter no es 29, se establece la bandera para saltar
+
+    lda vblank_flag
+    cmp #1
+    beq clear_skip_flag ; Si vblank_flag está establecido, limpiamos la bandera para no saltar
+
+set_skip_flag:
+    lda #1
+    sta skip_animation_flag
+    rts
+
+clear_skip_flag:
+    lda #0
+    sta skip_animation_flag
+    rts
+
+
 
 palettes:
 .byte $0f, $10, $07, $2d
@@ -265,77 +325,77 @@ palettes:
 .byte $00, $00, $00, $00
 
 ant_sprites:
-;primer sprite
+;primer sprite hacia arriba 1ra animacion
 .byte $54, $01, $00, $64
 .byte $54, $02, $00, $6C
 .byte $5C, $11, $00, $64
 .byte $5C, $12, $00, $6C
 
-;segundo sprite
-.byte $54, $03, $00, $74
-.byte $54, $04, $00, $7C
-.byte $5C, $13, $00, $74
-.byte $5C, $14, $00, $7C
+; ;segundo sprite hacia arriba 2da animacion
+; .byte $54, $03, $00, $74
+; .byte $54, $04, $00, $7C
+; .byte $5C, $13, $00, $74
+; .byte $5C, $14, $00, $7C
 
-;tercer sprite
-.byte $54, $05, $00, $84 
-.byte $54, $06, $00, $8C
-.byte $5C, $15, $00, $84
-.byte $5C, $16, $00, $8C
+; ;tercer sprite hacia arriba 3ra animacion
+; .byte $54, $05, $00, $84 
+; .byte $54, $06, $00, $8C
+; .byte $5C, $15, $00, $84
+; .byte $5C, $16, $00, $8C
 
-;cuarto sprite 
-.byte $64, $21, $00, $64
-.byte $64, $22, $00, $6C
-.byte $6C, $31, $00, $64
-.byte $6C, $32, $00, $6C
+;cuarto sprite hacia derecha 1ra animacion
+.byte $54, $21, $00, $74
+.byte $54, $22, $00, $7C
+.byte $5C, $31, $00, $74
+.byte $5C, $32, $00, $7C
 
-;quinto sprite
-.byte $64, $23, $00, $74
-.byte $64, $24, $00, $7C
-.byte $6C, $33, $00, $74
-.byte $6C, $34, $00, $7C
+; ;quinto sprite hacia derecha 2da animacion
+; .byte $64, $23, $00, $74
+; .byte $64, $24, $00, $7C
+; .byte $6C, $33, $00, $74
+; .byte $6C, $34, $00, $7C
 
-;sexto sprite
-.byte $64, $25, $00, $84
-.byte $64, $26, $00, $8C
-.byte $6C, $35, $00, $84
-.byte $6C, $36, $00, $8C
+; ;sexto sprite hacia derecha 3ra animacion
+; .byte $64, $25, $00, $84
+; .byte $64, $26, $00, $8C
+; .byte $6C, $35, $00, $84
+; .byte $6C, $36, $00, $8C
 
-;septimo sprite
-.byte $74, $41, $00, $64
-.byte $74, $42, $00, $6C
-.byte $7C, $51, $00, $64
-.byte $7C, $52, $00, $6C
+;septimo sprite hacia abajo 1ra animacion
+.byte $54, $41, $00, $84
+.byte $54, $42, $00, $8C
+.byte $5C, $51, $00, $84
+.byte $5C, $52, $00, $8C
 
-;octavo sprite
-.byte $74, $43, $00, $74
-.byte $74, $44, $00, $7C
-.byte $7C, $53, $00, $74
-.byte $7C, $54, $00, $7C
+; ;octavo sprite hacia abajo 2da animacion
+; .byte $74, $43, $00, $74
+; .byte $74, $44, $00, $7C
+; .byte $7C, $53, $00, $74
+; .byte $7C, $54, $00, $7C
 
-;noveno sprite
-.byte $74, $45, $00, $84
-.byte $74, $46, $00, $8C
-.byte $7C, $55, $00, $84
-.byte $7C, $56, $00, $8C
+; ;noveno sprite hacia abajo 3ra animacion
+; .byte $74, $45, $00, $84
+; .byte $74, $46, $00, $8C
+; .byte $7C, $55, $00, $84
+; .byte $7C, $56, $00, $8C
 
-;decimo sprite
-.byte $84, $61, $00, $64
-.byte $84, $62, $00, $6C
-.byte $8C, $71, $00, $64
-.byte $8C, $72, $00, $6C
+;decimo sprite hacia izquierda 1ra animacion
+.byte $54, $61, $00, $94
+.byte $54, $62, $00, $9C
+.byte $5C, $71, $00, $94
+.byte $5C, $72, $00, $9C
 
-;onceavo sprite
-.byte $84, $63, $00, $74
-.byte $84, $64, $00, $7C
-.byte $8C, $73, $00, $74
-.byte $8C, $74, $00, $7C
+; ;onceavo sprite hacia izquierda 2da animacion
+; .byte $84, $63, $00, $74
+; .byte $84, $64, $00, $7C
+; .byte $8C, $73, $00, $74
+; .byte $8C, $74, $00, $7C
 
-;doceavo sprite
-.byte $84, $65, $00, $84
-.byte $84, $66, $00, $8C
-.byte $8C, $75, $00, $84
-.byte $8C, $76, $00, $8C
+; ;doceavo sprite hacia izquierda 3ra animacion
+; .byte $84, $65, $00, $84
+; .byte $84, $66, $00, $8C
+; .byte $8C, $75, $00, $84
+; .byte $8C, $76, $00, $8C
 
 
 
